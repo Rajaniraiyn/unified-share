@@ -46,7 +46,7 @@ Native AirDrop is not equivalent to normal LAN sharing. [OpenDrop](https://githu
 
 The URL is HTTP because arbitrary recipient browsers cannot trust a locally generated TLS certificate. Treat anyone who possesses the link as an authorized recipient, and use it only on a trusted LAN. The adapter currently serves regular files; folder/archive support and an in-panel QR renderer belong in later milestones.
 
-See [docs/architecture.md](docs/architecture.md) for boundaries and milestones.
+See [docs/architecture.md](docs/architecture.md) for boundaries and milestones, and [docs/native-interop.md](docs/native-interop.md) for the Quick Share trust/QR and hardware-gated AirDrop plan.
 
 Transfer history is capped at 200 entries under the user's XDG state directory. It records route, recipient label, item count, outcome, and message—but never source paths or filenames. `config --device-name` stores the human-friendly name advertised by the Quick Share engine.
 
