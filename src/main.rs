@@ -406,7 +406,7 @@ fn share(paths: Vec<PathBuf>, options: ShareOptions) -> Result<()> {
                 "completed",
                 "Transfer completed",
             ),
-            Err(error) => history::record(route, &target, item_count, "failed", &error.to_string()),
+            Err(_) => history::record(route, &target, item_count, "failed", "Transfer failed"),
         }
     }
     result
