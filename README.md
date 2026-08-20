@@ -6,7 +6,7 @@ It is deliberately split from desktop UI integrations. The core owns capability 
 
 ## Current milestone
 
-Version 0.3 includes the native Browser / QR fallback plus an experimental, on-demand Quick Share discovery and outbound-transfer engine. LocalSend remains an explicit working fallback. It does **not** claim device combinations that have not passed a live interoperability test are stable.
+Version 0.4 adds a private local transfer history and configurable Quick Share device identity to the native Browser / QR fallback and on-demand Quick Share engine. LocalSend remains an explicit working fallback. It does **not** claim device combinations that have not passed a live interoperability test are stable.
 
 ```bash
 cargo run -- status
@@ -16,13 +16,15 @@ cargo run -- share --via browser --json ~/Downloads/example.txt
 cargo run -- stop TRANSFER_ID --json
 cargo run -- discover --timeout-seconds 8 --json
 cargo run -- share --via quick-share --device DEVICE_ID --device-name "Pixel" --json ~/Downloads/example.txt
+cargo run -- history --json
+cargo run -- config --device-name "My Omarchy"
 ```
 
 The JSON contract starts at `schema_version: 1` so Omarchy and other clients can evolve independently from the transfer implementation.
 
 ## Adapter roadmap
 
-| Adapter | Targets | v0.3 state |
+| Adapter | Targets | v0.4 state |
 |---|---|---|
 | Quick Share | Native Android and Google's Windows Quick Share | Experimental native discovery and outbound transfer |
 | Browser / QR | Any modern phone or computer, without installing an app | Ready: native, expiring LAN download links |
@@ -45,6 +47,8 @@ Native AirDrop is not equivalent to normal LAN sharing. [OpenDrop](https://githu
 The URL is HTTP because arbitrary recipient browsers cannot trust a locally generated TLS certificate. Treat anyone who possesses the link as an authorized recipient, and use it only on a trusted LAN. The adapter currently serves regular files; folder/archive support and an in-panel QR renderer belong in later milestones.
 
 See [docs/architecture.md](docs/architecture.md) for boundaries and milestones.
+
+Transfer history is capped at 200 entries under the user's XDG state directory. It records route, recipient label, item count, outcome, and message—but never source paths or filenames. `config --device-name` stores the human-friendly name advertised by the Quick Share engine.
 
 ## License
 

@@ -8,7 +8,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
 mod browser;
+mod history;
 mod quick_share;
+mod settings;
 
 const SCHEMA_VERSION: u8 = 1;
 
@@ -76,6 +78,27 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Show or clear the private on-device transfer history.
+    History {
+        /// Remove all saved history entries.
+        #[arg(long)]
+        clear: bool,
+        /// Maximum number of newest entries to return.
+        #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u64).range(1..=200))]
+        limit: u64,
+        /// Emit the stable machine-readable history contract.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read or change how this computer appears to nearby devices.
+    Config {
+        /// Set the Quick Share sender/receiver display name.
+        #[arg(long)]
+        device_name: Option<String>,
+        /// Emit the stable machine-readable settings contract.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -86,6 +109,19 @@ enum AdapterChoice {
     Bluetooth,
     AirDrop,
     LocalSend,
+}
+
+impl AdapterChoice {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::QuickShare => "quick_share",
+            Self::Browser => "browser",
+            Self::Bluetooth => "bluetooth",
+            Self::AirDrop => "airdrop",
+            Self::LocalSend => "localsend",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -111,6 +147,7 @@ struct AdapterStatus {
 struct StatusDocument {
     schema_version: u8,
     version: &'static str,
+    device_name: String,
     adapters: Vec<AdapterStatus>,
 }
 
@@ -183,6 +220,18 @@ fn run() -> Result<()> {
                 json,
             )
         }
+        Commands::History { clear, limit, json } => {
+            if clear {
+                history::clear()?;
+            }
+            history::print(limit as usize, json)
+        }
+        Commands::Config { device_name, json } => {
+            if let Some(value) = device_name {
+                settings::set_device_name(&value)?;
+            }
+            settings::print(json)
+        }
     }
 }
 
@@ -209,6 +258,7 @@ fn status_document() -> StatusDocument {
     StatusDocument {
         schema_version: SCHEMA_VERSION,
         version: env!("CARGO_PKG_VERSION"),
+        device_name: settings::device_name(),
         adapters: detect_adapters(&path),
     }
 }
@@ -339,6 +389,30 @@ struct ShareOptions {
 }
 
 fn share(paths: Vec<PathBuf>, options: ShareOptions) -> Result<()> {
+    let route = options.via.id();
+    let target = options
+        .device_name
+        .clone()
+        .unwrap_or_else(|| route.replace('_', " "));
+    let item_count = paths.len();
+    let dry_run = options.dry_run;
+    let result = share_inner(paths, options);
+    if !dry_run {
+        match &result {
+            Ok(()) => history::record(
+                route,
+                &target,
+                item_count,
+                "completed",
+                "Transfer completed",
+            ),
+            Err(error) => history::record(route, &target, item_count, "failed", &error.to_string()),
+        }
+    }
+    result
+}
+
+fn share_inner(paths: Vec<PathBuf>, options: ShareOptions) -> Result<()> {
     let paths = validate_paths(paths)?;
     let selected = match options.via {
         AdapterChoice::Auto | AdapterChoice::LocalSend => "localsend",

@@ -233,5 +233,5 @@ fn print_transfer(document: TransferDocument, json: bool) -> Result<()> {
 }
 
 fn host_name() -> String {
-    std::env::var("HOSTNAME").unwrap_or_else(|_| "Omarchy".into())
+    crate::settings::device_name()
 }
