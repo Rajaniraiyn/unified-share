@@ -6,7 +6,7 @@ It is deliberately split from desktop UI integrations. The core owns capability 
 
 ## Current milestone
 
-Version 0.2 establishes the contract, includes a native Browser / QR fallback, and keeps LocalSend as an explicit working fallback. It does **not** claim unfinished protocol adapters are usable.
+Version 0.3 includes the native Browser / QR fallback plus an experimental, on-demand Quick Share discovery and outbound-transfer engine. LocalSend remains an explicit working fallback. It does **not** claim device combinations that have not passed a live interoperability test are stable.
 
 ```bash
 cargo run -- status
@@ -14,21 +14,27 @@ cargo run -- status --json
 cargo run -- share --dry-run ~/Downloads/example.txt
 cargo run -- share --via browser --json ~/Downloads/example.txt
 cargo run -- stop TRANSFER_ID --json
+cargo run -- discover --timeout-seconds 8 --json
+cargo run -- share --via quick-share --device DEVICE_ID --device-name "Pixel" --json ~/Downloads/example.txt
 ```
 
 The JSON contract starts at `schema_version: 1` so Omarchy and other clients can evolve independently from the transfer implementation.
 
 ## Adapter roadmap
 
-| Adapter | Targets | v0.2 state |
+| Adapter | Targets | v0.3 state |
 |---|---|---|
-| Quick Share | Native Android and Google's Windows Quick Share | Backend research complete; integration next |
+| Quick Share | Native Android and Google's Windows Quick Share | Experimental native discovery and outbound transfer |
 | Browser / QR | Any modern phone or computer, without installing an app | Ready: native, expiring LAN download links |
 | Bluetooth OBEX | Android, Windows, Linux, and some macOS flows | Optional slow fallback |
 | AirDrop | iOS and macOS | Hardware-gated experimental adapter |
 | LocalSend | Existing LocalSend devices | Ready migration fallback |
 
-The leading Quick Share base is [RQuickShare](https://github.com/Martichou/rquickshare), whose Rust core is also used by [Packet](https://github.com/nozwock/packet). The newer [Linux port of Google's Nearby stack](https://github.com/kidfromjupiter/nearby) is promising but currently documents active Bluetooth and lifecycle bugs, so it belongs behind an experimental adapter until it settles.
+Quick Share uses the GPL-3.0 `rqs_lib` engine from the [Packet-maintained RQuickShare fork](https://github.com/nozwock/rquickshare), pinned through [our public integration fork](https://github.com/Rajaniraiyn/rquickshare). We retain upstream history and attribution instead of copying Packet's GTK interface. Our fork vendors `protoc` for reproducible builds, accepts Android's short 17-byte mDNS records, and reports outbound connection failures to clients.
+
+`discover` runs BLE-assisted mDNS discovery only for the requested bounded window, then shuts the engine down. A Quick Share send likewise exists only for the consent/transfer lifetime. The recipient must be visible in Quick Share and on the same Wi-Fi LAN. The confirmation code is written to stderr as soon as the protocol exposes it. Live Android and Windows device testing is still required before this route becomes stable or automatic.
+
+The newer [Linux port of Google's Nearby stack](https://github.com/kidfromjupiter/nearby) is promising but currently documents active Bluetooth and lifecycle bugs, so it remains a research alternative rather than a second protocol engine.
 
 Native AirDrop is not equivalent to normal LAN sharing. [OpenDrop](https://github.com/seemoo-lab/opendrop) requires an AWDL implementation such as OWL, and current end-to-end Linux work remains dependent on Wi-Fi driver behavior. Browser / QR therefore remains the safe iPhone fallback on unsupported hardware.
 

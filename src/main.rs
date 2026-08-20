@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
 mod browser;
+mod quick_share;
 
 const SCHEMA_VERSION: u8 = 1;
 
@@ -26,6 +27,15 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Discover Android and Windows Quick Share devices for a bounded time.
+    Discover {
+        /// Number of seconds to listen for nearby Quick Share devices.
+        #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u64).range(1..=60))]
+        timeout_seconds: u64,
+        /// Emit the stable machine-readable device list.
+        #[arg(long)]
+        json: bool,
+    },
     /// Share one or more files or folders using an available adapter.
     Share {
         #[arg(required = true)]
@@ -41,6 +51,15 @@ enum Commands {
         /// Lifetime of a Browser / QR link in seconds.
         #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(30..=86400))]
         timeout_seconds: u64,
+        /// Quick Share device id returned by `discover`.
+        #[arg(long)]
+        device: Option<String>,
+        /// Friendly Quick Share device name shown during consent.
+        #[arg(long)]
+        device_name: Option<String>,
+        /// Maximum time to wait for Quick Share consent and transfer.
+        #[arg(long, default_value_t = 120, value_parser = clap::value_parser!(u64).range(10..=3600))]
+        transfer_timeout_seconds: u64,
     },
     /// Internal entry point for the isolated Browser / QR server.
     #[command(hide = true)]
@@ -123,13 +142,31 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Status { json } => print_status(json),
+        Commands::Discover {
+            timeout_seconds,
+            json,
+        } => quick_share::discover(timeout_seconds, json),
         Commands::Share {
             paths,
             via,
             dry_run,
             json,
             timeout_seconds,
-        } => share(paths, via, dry_run, json, timeout_seconds),
+            device,
+            device_name,
+            transfer_timeout_seconds,
+        } => share(
+            paths,
+            ShareOptions {
+                via,
+                dry_run,
+                json,
+                timeout_seconds,
+                device,
+                device_name,
+                transfer_timeout_seconds,
+            },
+        ),
         Commands::BrowserServe { state, ready } => browser::serve_from_state(&state, &ready),
         Commands::Stop { transfer_id, json } => {
             browser::stop(&transfer_id)?;
@@ -177,7 +214,6 @@ fn status_document() -> StatusDocument {
 }
 
 fn detect_adapters(path: &std::ffi::OsStr) -> Vec<AdapterStatus> {
-    let quick_backend = first_command(path, &["packet", "r-quick-share", "rquickshare"]);
     let localsend = first_command(path, &["localsend"]);
     let bluetoothctl = first_command(path, &["bluetoothctl"]);
     let obex = first_command(path, &["bluetooth-sendto", "blueman-sendto", "obexctl"]);
@@ -185,24 +221,13 @@ fn detect_adapters(path: &std::ffi::OsStr) -> Vec<AdapterStatus> {
     let owl = first_command(path, &["owl", "owl-run"]);
     let wifi_driver = wifi_driver();
 
-    let quick_share = if let Some(command) = quick_backend {
-        AdapterStatus {
-            id: "quick_share",
-            name: "Quick Share",
-            state: AdapterState::Experimental,
-            native_targets: vec!["Android", "Windows Quick Share"],
-            detail: "A compatible backend is installed; the stable core integration is the next milestone.".into(),
-            backend: Some(command),
-        }
-    } else {
-        AdapterStatus {
-            id: "quick_share",
-            name: "Quick Share",
-            state: AdapterState::Unavailable,
-            native_targets: vec!["Android", "Windows Quick Share"],
-            detail: "No Quick Share backend is installed yet.".into(),
-            backend: None,
-        }
+    let quick_share = AdapterStatus {
+        id: "quick_share",
+        name: "Quick Share",
+        state: AdapterState::Experimental,
+        native_targets: vec!["Android", "Windows Quick Share"],
+        detail: "The native on-demand rqs engine is installed; live device interoperability still needs verification.".into(),
+        backend: Some("native-rqs".into()),
     };
 
     let browser = match browser::availability() {
@@ -303,31 +328,50 @@ fn detect_adapters(path: &std::ffi::OsStr) -> Vec<AdapterStatus> {
     vec![quick_share, browser, bluetooth, airdrop, localsend]
 }
 
-fn share(
-    paths: Vec<PathBuf>,
+struct ShareOptions {
     via: AdapterChoice,
     dry_run: bool,
     json: bool,
     timeout_seconds: u64,
-) -> Result<()> {
+    device: Option<String>,
+    device_name: Option<String>,
+    transfer_timeout_seconds: u64,
+}
+
+fn share(paths: Vec<PathBuf>, options: ShareOptions) -> Result<()> {
     let paths = validate_paths(paths)?;
-    let selected = match via {
+    let selected = match options.via {
         AdapterChoice::Auto | AdapterChoice::LocalSend => "localsend",
-        AdapterChoice::QuickShare => {
-            bail!("Quick Share is not wired into the stable adapter contract yet")
-        }
+        AdapterChoice::QuickShare => "quick_share",
         AdapterChoice::Browser => "browser",
         AdapterChoice::Bluetooth => bail!("Bluetooth OBEX sharing is not implemented yet"),
         AdapterChoice::AirDrop => bail!("AirDrop is unsupported on this machine's current stack"),
     };
 
+    if selected == "quick_share" {
+        let device = options
+            .device
+            .context("Quick Share needs --device DEVICE_ID from `unified-share discover --json`")?;
+        return quick_share::send(
+            &paths,
+            &device,
+            options
+                .device_name
+                .as_deref()
+                .unwrap_or("Quick Share device"),
+            options.transfer_timeout_seconds,
+            options.dry_run,
+            options.json,
+        );
+    }
+
     if selected == "browser" {
-        let launch = browser::launch(&paths, timeout_seconds, dry_run)?;
+        let launch = browser::launch(&paths, options.timeout_seconds, options.dry_run)?;
         let result = ShareResult {
             schema_version: SCHEMA_VERSION,
             ok: true,
             adapter: selected,
-            message: if dry_run {
+            message: if options.dry_run {
                 format!(
                     "Would create an expiring browser link for {} file(s)",
                     paths.len()
@@ -339,7 +383,7 @@ fn share(
             expires_at_unix: launch.as_ref().map(|value| value.expires_at_unix),
             transfer_id: launch.map(|value| value.transfer_id),
         };
-        return print_share_result(result, json);
+        return print_share_result(result, options.json);
     }
 
     let path = env::var_os("PATH").unwrap_or_default();
@@ -347,7 +391,7 @@ fn share(
         bail!("LocalSend is not installed and no stable replacement adapter is ready");
     }
 
-    if !dry_run {
+    if !options.dry_run {
         let mut command = Command::new("systemd-run");
         command.args([
             "--user",
@@ -370,7 +414,7 @@ fn share(
         schema_version: SCHEMA_VERSION,
         ok: true,
         adapter: selected,
-        message: if dry_run {
+        message: if options.dry_run {
             format!("Would share {} item(s) with LocalSend", paths.len())
         } else {
             format!("Opened LocalSend for {} item(s)", paths.len())
@@ -379,7 +423,7 @@ fn share(
         expires_at_unix: None,
         transfer_id: None,
     };
-    print_share_result(result, json)
+    print_share_result(result, options.json)
 }
 
 fn print_share_result(result: ShareResult, json: bool) -> Result<()> {

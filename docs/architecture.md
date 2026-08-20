@@ -22,7 +22,7 @@ Each adapter reports `ready`, `experimental`, `unavailable`, or `unsupported`. R
 ## Milestones
 
 1. Stable status contract and LocalSend migration adapter.
-2. Embed or wrap `rqs_lib` for Quick Share discovery, consent, progress, send, and receive.
+2. Embed pinned `rqs_lib` for bounded Quick Share discovery and outbound transfers. Discovery and send are now wired; shell consent/progress UX, inbound consent, and device interoperability tests remain.
 3. Add a tokenized, expiring LAN browser transfer with strict path handling. The core now provides the URL contract; desktop clients own QR presentation.
 4. Add a local event socket and transfer history; keep the daemon socket-activated or on-demand.
 5. Add Bluetooth OBEX only when the platform exposes a reliable backend.
