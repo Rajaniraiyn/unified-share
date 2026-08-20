@@ -7,6 +7,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
+mod airdrop;
 mod browser;
 mod history;
 mod quick_share;
@@ -99,6 +100,12 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect native AirDrop prerequisites without changing Wi-Fi state.
+    AirDropProbe {
+        /// Emit a stable machine-readable capability report.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -130,7 +137,6 @@ enum AdapterState {
     Ready,
     Experimental,
     Unavailable,
-    Unsupported,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -232,6 +238,7 @@ fn run() -> Result<()> {
             }
             settings::print(json)
         }
+        Commands::AirDropProbe { json } => airdrop::print_probe(json),
     }
 }
 
@@ -267,9 +274,7 @@ fn detect_adapters(path: &std::ffi::OsStr) -> Vec<AdapterStatus> {
     let localsend = first_command(path, &["localsend"]);
     let bluetoothctl = first_command(path, &["bluetoothctl"]);
     let obex = first_command(path, &["bluetooth-sendto", "blueman-sendto", "obexctl"]);
-    let opendrop = first_command(path, &["opendrop"]);
-    let owl = first_command(path, &["owl", "owl-run"]);
-    let wifi_driver = wifi_driver();
+    let airdrop_probe = airdrop::AirDropProbe::detect(path);
 
     let quick_share = AdapterStatus {
         id: "quick_share",
@@ -329,29 +334,22 @@ fn detect_adapters(path: &std::ffi::OsStr) -> Vec<AdapterStatus> {
         },
     };
 
-    let airdrop_ready = opendrop.is_some() && owl.is_some();
-    let airdrop = if airdrop_ready {
+    let airdrop = if airdrop_probe.safe_to_start {
         AdapterStatus {
             id: "airdrop",
             name: "AirDrop",
             state: AdapterState::Experimental,
             native_targets: vec!["iOS", "macOS"],
-            detail: format!(
-                "OpenDrop and OWL were found; compatibility still depends on Wi-Fi monitor mode (driver: {}).",
-                wifi_driver.as_deref().unwrap_or("unknown")
-            ),
-            backend: opendrop,
+            detail: airdrop_probe.summary(),
+            backend: airdrop_probe.opendrop.clone(),
         }
     } else {
         AdapterStatus {
             id: "airdrop",
             name: "AirDrop",
-            state: AdapterState::Unsupported,
+            state: AdapterState::Unavailable,
             native_targets: vec!["iOS", "macOS"],
-            detail: format!(
-                "Native AirDrop needs OpenDrop, OWL, and proven AWDL-capable monitor mode; this machine uses {}.",
-                wifi_driver.as_deref().unwrap_or("an unknown Wi-Fi driver")
-            ),
+            detail: airdrop_probe.summary(),
             backend: None,
         }
     };
@@ -419,7 +417,9 @@ fn share_inner(paths: Vec<PathBuf>, options: ShareOptions) -> Result<()> {
         AdapterChoice::QuickShare => "quick_share",
         AdapterChoice::Browser => "browser",
         AdapterChoice::Bluetooth => bail!("Bluetooth OBEX sharing is not implemented yet"),
-        AdapterChoice::AirDrop => bail!("AirDrop is unsupported on this machine's current stack"),
+        AdapterChoice::AirDrop => bail!(
+            "AirDrop is not safely available; run `unified-share air-drop-probe` for the hardware and backend report"
+        ),
     };
 
     if selected == "quick_share" {
@@ -535,27 +535,11 @@ fn command_exists_in(path: &std::ffi::OsStr, name: &str) -> bool {
     })
 }
 
-fn wifi_driver() -> Option<String> {
-    let entries = fs::read_dir("/sys/class/net").ok()?;
-    for entry in entries.flatten() {
-        let interface = entry.path();
-        if !interface.join("wireless").exists() {
-            continue;
-        }
-        let driver = fs::read_link(interface.join("device/driver")).ok()?;
-        return driver
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned());
-    }
-    None
-}
-
 fn state_label(state: &AdapterState) -> &'static str {
     match state {
         AdapterState::Ready => "ready",
         AdapterState::Experimental => "experimental",
         AdapterState::Unavailable => "unavailable",
-        AdapterState::Unsupported => "unsupported",
     }
 }
 

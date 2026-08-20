@@ -17,7 +17,7 @@ Omarchy plugin / CLI / future desktop clients
              LocalSend fallback
 ```
 
-Each adapter reports `ready`, `experimental`, `unavailable`, or `unsupported`. Routing may only select `ready` adapters automatically.
+Each adapter reports `ready`, `experimental`, or `unavailable`. Routing may only select `ready` adapters automatically. Hardware not yet proven compatible is `unavailable`, not labelled unsupported from an incomplete probe.
 
 ## Milestones
 

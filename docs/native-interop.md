@@ -18,7 +18,17 @@ The QR work stays inside the Quick Share adapter and must not be surfaced as rea
 
 AirDrop requires Apple Wireless Direct Link (AWDL), not ordinary LAN transport. OpenDrop supplies the upper protocol and OWL supplies an experimental Linux AWDL link, but OWL requires a Wi-Fi card with usable active monitor mode and frame injection.
 
-This machine currently uses Intel `iwlwifi` (`8086:51f1`). No end-to-end result has been established for that card, so the AirDrop adapter remains hardware-gated and unsupported. Unified Share must not reconfigure the primary Wi-Fi interface, require root, or interrupt internet access merely because the user opened a share chooser. A future implementation needs an explicit hardware probe and opt-in transaction with guaranteed network restoration.
+This machine currently uses Intel `iwlwifi` (`8086:51f1`). Its PHY advertises monitor mode, but that does not prove active monitor-mode frame injection or Apple-device interoperability. Neither OpenDrop nor OWL is installed, and there is no active `awdl0` link. The AirDrop route is therefore **unavailable**, not proven hardware-unsupported.
+
+`unified-share air-drop-probe --json` now exposes these facts without mutating the network. The route may become experimental only when OpenDrop and OWL are present and an externally prepared `awdl0` interface already has link-local IPv6. This deliberately conservative gate prevents a share chooser from requesting root, converting the primary Wi-Fi interface to monitor mode, changing channels, or interrupting internet access.
+
+Current upstream limitations matter to the product design:
+
+- OWL requires active monitor mode with frame injection; plain `iw` monitor-mode advertisement is insufficient evidence.
+- Upstream OWL does not preserve a concurrent AP connection on the same interface and describes itself as experimental.
+- Stock OpenDrop has not been verified here against current iOS/macOS releases. Community patches reporting newer iOS interoperability are useful research inputs, but are not a stable backend contract for Unified Share yet.
+
+The next safe implementation step is an explicit setup workflow for a dedicated, known-compatible Wi-Fi adapter. It must record the selected interface, verify injection and AWDL link creation under informed user control, restore network state on every exit path, and then run a real send/receive matrix before the route is offered in the normal chooser.
 
 ## UX boundary
 

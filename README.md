@@ -18,6 +18,7 @@ cargo run -- discover --timeout-seconds 8 --json
 cargo run -- share --via quick-share --device DEVICE_ID --device-name "Pixel" --json ~/Downloads/example.txt
 cargo run -- history --json
 cargo run -- config --device-name "My Omarchy"
+cargo run -- air-drop-probe --json
 ```
 
 The JSON contract starts at `schema_version: 1` so Omarchy and other clients can evolve independently from the transfer implementation.
@@ -29,7 +30,7 @@ The JSON contract starts at `schema_version: 1` so Omarchy and other clients can
 | Quick Share | Native Android and Google's Windows Quick Share | Experimental native discovery and outbound transfer |
 | Browser / QR | Any modern phone or computer, without installing an app | Ready: native, expiring LAN download links |
 | Bluetooth OBEX | Android, Windows, Linux, and some macOS flows | Optional slow fallback |
-| AirDrop | iOS and macOS | Hardware-gated experimental adapter |
+| AirDrop | iOS and macOS | Non-mutating capability probe; transfer remains unavailable by default |
 | LocalSend | Existing LocalSend devices | Ready migration fallback |
 
 Quick Share uses the GPL-3.0 `rqs_lib` engine from the [Packet-maintained RQuickShare fork](https://github.com/nozwock/rquickshare), pinned through [our public integration fork](https://github.com/Rajaniraiyn/rquickshare). We retain upstream history and attribution instead of copying Packet's GTK interface. Our fork vendors `protoc` for reproducible builds, accepts Android's short 17-byte mDNS records, and reports outbound connection failures to clients.
@@ -38,7 +39,9 @@ Quick Share uses the GPL-3.0 `rqs_lib` engine from the [Packet-maintained RQuick
 
 The newer [Linux port of Google's Nearby stack](https://github.com/kidfromjupiter/nearby) is promising but currently documents active Bluetooth and lifecycle bugs, so it remains a research alternative rather than a second protocol engine.
 
-Native AirDrop is not equivalent to normal LAN sharing. [OpenDrop](https://github.com/seemoo-lab/opendrop) requires an AWDL implementation such as OWL, and current end-to-end Linux work remains dependent on Wi-Fi driver behavior. Browser / QR therefore remains the safe iPhone fallback on unsupported hardware.
+Native AirDrop is not equivalent to normal LAN sharing. [OpenDrop](https://github.com/seemoo-lab/opendrop) requires an AWDL implementation such as [OWL](https://github.com/seemoo-lab/owl), active monitor mode, and working frame injection. Upstream OWL also takes exclusive control of its Wi-Fi interface rather than preserving a concurrent AP connection. Browser / QR therefore remains the safe iPhone fallback unless an AWDL link has been deliberately prepared outside Unified Share.
+
+`air-drop-probe` is a read-only capability report intended for desktop integrations and troubleshooting. It reports the Wi-Fi interface and driver, advertised monitor mode, installed backends, active connection risk, and whether an existing `awdl0` link has link-local IPv6. It never creates a monitor interface, changes channels, starts OWL, requests root, or disconnects Wi-Fi. Advertised monitor mode is deliberately not treated as proof of active frame injection.
 
 ## Browser / QR contract
 
