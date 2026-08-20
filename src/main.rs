@@ -7,6 +7,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
+mod browser;
+
 const SCHEMA_VERSION: u8 = 1;
 
 #[derive(Parser, Debug)]
@@ -36,6 +38,24 @@ enum Commands {
         /// Emit a JSON result instead of prose.
         #[arg(long)]
         json: bool,
+        /// Lifetime of a Browser / QR link in seconds.
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(30..=86400))]
+        timeout_seconds: u64,
+    },
+    /// Internal entry point for the isolated Browser / QR server.
+    #[command(hide = true)]
+    BrowserServe {
+        #[arg(long)]
+        state: PathBuf,
+        #[arg(long)]
+        ready: PathBuf,
+    },
+    /// Stop an active Browser / QR transfer before it expires.
+    Stop {
+        transfer_id: String,
+        /// Emit a JSON result instead of prose.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -54,7 +74,6 @@ enum AdapterChoice {
 enum AdapterState {
     Ready,
     Experimental,
-    Planned,
     Unavailable,
     Unsupported,
 }
@@ -82,6 +101,12 @@ struct ShareResult {
     ok: bool,
     adapter: &'static str,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at_unix: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transfer_id: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -103,7 +128,24 @@ fn run() -> Result<()> {
             via,
             dry_run,
             json,
-        } => share(paths, via, dry_run, json),
+            timeout_seconds,
+        } => share(paths, via, dry_run, json, timeout_seconds),
+        Commands::BrowserServe { state, ready } => browser::serve_from_state(&state, &ready),
+        Commands::Stop { transfer_id, json } => {
+            browser::stop(&transfer_id)?;
+            print_share_result(
+                ShareResult {
+                    schema_version: SCHEMA_VERSION,
+                    ok: true,
+                    adapter: "browser",
+                    message: format!("Stopped Browser / QR transfer {transfer_id}"),
+                    url: None,
+                    expires_at_unix: None,
+                    transfer_id: Some(transfer_id),
+                },
+                json,
+            )
+        }
     }
 }
 
@@ -163,13 +205,25 @@ fn detect_adapters(path: &std::ffi::OsStr) -> Vec<AdapterStatus> {
         }
     };
 
-    let browser = AdapterStatus {
-        id: "browser",
-        name: "Browser / QR",
-        state: AdapterState::Planned,
-        native_targets: vec!["iOS", "Android", "Windows", "macOS", "Linux"],
-        detail: "No-install, tokenized LAN transfer is planned as the universal fallback.".into(),
-        backend: first_command(path, &["qrencode"]),
+    let browser = match browser::availability() {
+        Ok(address) => AdapterStatus {
+            id: "browser",
+            name: "Browser / QR",
+            state: AdapterState::Ready,
+            native_targets: vec!["iOS", "Android", "Windows", "macOS", "Linux"],
+            detail: format!(
+                "Native expiring LAN links are ready on {address}; recipients only need a browser."
+            ),
+            backend: Some("native".into()),
+        },
+        Err(detail) => AdapterStatus {
+            id: "browser",
+            name: "Browser / QR",
+            state: AdapterState::Unavailable,
+            native_targets: vec!["iOS", "Android", "Windows", "macOS", "Linux"],
+            detail,
+            backend: None,
+        },
     };
 
     let bluetooth = match (bluetoothctl, obex) {
@@ -249,17 +303,44 @@ fn detect_adapters(path: &std::ffi::OsStr) -> Vec<AdapterStatus> {
     vec![quick_share, browser, bluetooth, airdrop, localsend]
 }
 
-fn share(paths: Vec<PathBuf>, via: AdapterChoice, dry_run: bool, json: bool) -> Result<()> {
+fn share(
+    paths: Vec<PathBuf>,
+    via: AdapterChoice,
+    dry_run: bool,
+    json: bool,
+    timeout_seconds: u64,
+) -> Result<()> {
     let paths = validate_paths(paths)?;
     let selected = match via {
         AdapterChoice::Auto | AdapterChoice::LocalSend => "localsend",
         AdapterChoice::QuickShare => {
             bail!("Quick Share is not wired into the stable adapter contract yet")
         }
-        AdapterChoice::Browser => bail!("Browser / QR sharing is planned but not implemented yet"),
+        AdapterChoice::Browser => "browser",
         AdapterChoice::Bluetooth => bail!("Bluetooth OBEX sharing is not implemented yet"),
         AdapterChoice::AirDrop => bail!("AirDrop is unsupported on this machine's current stack"),
     };
+
+    if selected == "browser" {
+        let launch = browser::launch(&paths, timeout_seconds, dry_run)?;
+        let result = ShareResult {
+            schema_version: SCHEMA_VERSION,
+            ok: true,
+            adapter: selected,
+            message: if dry_run {
+                format!(
+                    "Would create an expiring browser link for {} file(s)",
+                    paths.len()
+                )
+            } else {
+                format!("Browser link ready for {} file(s)", paths.len())
+            },
+            url: launch.as_ref().map(|value| value.url.clone()),
+            expires_at_unix: launch.as_ref().map(|value| value.expires_at_unix),
+            transfer_id: launch.map(|value| value.transfer_id),
+        };
+        return print_share_result(result, json);
+    }
 
     let path = env::var_os("PATH").unwrap_or_default();
     if first_command(&path, &["localsend"]).is_none() {
@@ -294,7 +375,14 @@ fn share(paths: Vec<PathBuf>, via: AdapterChoice, dry_run: bool, json: bool) -> 
         } else {
             format!("Opened LocalSend for {} item(s)", paths.len())
         },
+        url: None,
+        expires_at_unix: None,
+        transfer_id: None,
     };
+    print_share_result(result, json)
+}
+
+fn print_share_result(result: ShareResult, json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string(&result)?);
     } else {
@@ -348,7 +436,6 @@ fn state_label(state: &AdapterState) -> &'static str {
     match state {
         AdapterState::Ready => "ready",
         AdapterState::Experimental => "experimental",
-        AdapterState::Planned => "planned",
         AdapterState::Unavailable => "unavailable",
         AdapterState::Unsupported => "unsupported",
     }
